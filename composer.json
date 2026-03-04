@@ -1,0 +1,6 @@
+{
+    "name": "friendsofbotble/fob-tiktok-pixel",
+    "description": "TikTok Pixel and Events API integration for Botble CMS",
+    "type": "library",
+    "require": {}
+}
