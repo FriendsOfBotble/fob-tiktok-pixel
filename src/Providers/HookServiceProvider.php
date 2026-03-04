@@ -4,15 +4,15 @@ namespace FriendsOfBotble\TikTokPixel\Providers;
 
 use Botble\Ecommerce\Events\OrderPlacedEvent;
 use Botble\Ecommerce\Events\ProductViewed;
+use Botble\Ecommerce\Facades\Cart;
 use Botble\Ecommerce\Models\Customer;
 use Botble\Ecommerce\Models\Product;
 use FriendsOfBotble\TikTokPixel\Services\TikTokPixelService;
-use Illuminate\Support\Collection;
 use Illuminate\Support\ServiceProvider;
 
 class HookServiceProvider extends ServiceProvider
 {
-    /** @var array<int|string, Product|null> */
+    /** @var array<int|string, mixed> */
     protected array $resolvedProducts = [];
 
     public function boot(): void
@@ -43,15 +43,24 @@ class HookServiceProvider extends ServiceProvider
             return (string) $html . $this->renderEventScripts($service);
         }, 998);
 
-        $this->registerEcommerceHooks($service);
-        $this->registerServerSideHooks($service);
+        if ($this->isEcommerceActive()) {
+            $this->registerEcommerceHooks($service);
+            $this->registerServerSideHooks($service);
+        }
+
+        $this->detectSearchEvent($service);
+    }
+
+    protected function isEcommerceActive(): bool
+    {
+        return function_exists('is_plugin_active') && is_plugin_active('ecommerce');
     }
 
     protected function renderPixelScript(TikTokPixelService $service): string
     {
         $identifyData = null;
 
-        if (class_exists(Customer::class)) {
+        if ($this->isEcommerceActive() && class_exists(Customer::class)) {
             $customer = auth('customer')->user();
 
             if ($customer) {
@@ -99,9 +108,7 @@ class HookServiceProvider extends ServiceProvider
                 $this->handleAddToCart($product, $service);
             }, 20);
 
-            add_action('ecommerce_post_checkout', function ($products, $request, $token, $sessionData) use ($service): void {
-                $this->handleCheckout($products, $service);
-            }, 20, 4);
+            $this->detectCheckoutEvent($service);
         }
 
         if (class_exists(OrderPlacedEvent::class)) {
@@ -112,8 +119,6 @@ class HookServiceProvider extends ServiceProvider
                 }
             );
         }
-
-        $this->detectSearchEvent($service);
     }
 
     protected function registerServerSideHooks(TikTokPixelService $service): void
@@ -141,7 +146,7 @@ class HookServiceProvider extends ServiceProvider
         }
     }
 
-    protected function handleProductViewed(ProductViewed $event, TikTokPixelService $service): void
+    protected function handleProductViewed($event, TikTokPixelService $service): void
     {
         $product = $this->resolveProduct($event->productId);
 
@@ -165,7 +170,7 @@ class HookServiceProvider extends ServiceProvider
 
     protected function handleAddToCart($product, TikTokPixelService $service): void
     {
-        if (! $product instanceof Product) {
+        if (! class_exists(Product::class) || ! $product instanceof Product) {
             return;
         }
 
@@ -184,31 +189,50 @@ class HookServiceProvider extends ServiceProvider
         ]);
     }
 
-    protected function handleCheckout($products, TikTokPixelService $service): void
+    protected function detectCheckoutEvent(TikTokPixelService $service): void
     {
-        if (! $products instanceof Collection) {
-            return;
-        }
+        add_filter(THEME_FRONT_FOOTER, function (?string $html) use ($service): ?string {
+            if (! request()->routeIs('public.checkout.information')) {
+                return $html;
+            }
 
-        $currency = get_application_currency()->title;
-        $totalValue = $products->sum(fn ($p) => (($p->front_sale_price ?? $p->price) ?: 0) * ($p->cartItem->qty ?? 1));
+            if (! class_exists(Cart::class)) {
+                return $html;
+            }
 
-        $contents = $products->map(fn ($p) => [
-            'content_id' => (string) $p->getKey(),
-            'content_type' => 'product',
-            'content_name' => $p->name,
-            'quantity' => $p->cartItem->qty ?? 1,
-            'price' => (float) ($p->front_sale_price ?? $p->price),
-        ])->values()->all();
+            $cart = Cart::instance('cart');
+            $products = $cart->products();
 
-        $service->bufferClientEvent('InitiateCheckout', [
-            'contents' => $contents,
-            'value' => (float) $totalValue,
-            'currency' => $currency,
-        ]);
+            if ($products->isEmpty()) {
+                return $html;
+            }
+
+            $currency = get_application_currency()->title;
+
+            $contents = $products->map(function ($product) use ($cart) {
+                $cartItem = $cart->content()->first(fn ($item) => $item->id == $product->getKey());
+                $quantity = $cartItem ? $cartItem->qty : 1;
+
+                return [
+                    'content_id' => (string) ($product->original_product ?? $product)->getKey(),
+                    'content_type' => 'product',
+                    'content_name' => ($product->original_product ?? $product)->name,
+                    'quantity' => $quantity,
+                    'price' => (float) ($product->front_sale_price ?? $product->price),
+                ];
+            })->values()->all();
+
+            $service->bufferClientEvent('InitiateCheckout', [
+                'contents' => $contents,
+                'value' => (float) $cart->rawSubTotal(),
+                'currency' => $currency,
+            ]);
+
+            return $html;
+        }, 10);
     }
 
-    protected function handleOrderPlaced(OrderPlacedEvent $event, TikTokPixelService $service): void
+    protected function handleOrderPlaced($event, TikTokPixelService $service): void
     {
         $order = $event->order;
         $order->loadMissing('products');
@@ -226,7 +250,7 @@ class HookServiceProvider extends ServiceProvider
 
         $service->bufferClientEvent('CompletePayment', [
             'contents' => $contents,
-            'value' => (float) $order->amount,
+            'value' => (float) $order->sub_total,
             'currency' => $currency,
         ], $eventId);
 
@@ -250,7 +274,7 @@ class HookServiceProvider extends ServiceProvider
         }, 10);
     }
 
-    protected function sendServerViewContent(ProductViewed $event, TikTokPixelService $service): void
+    protected function sendServerViewContent($event, TikTokPixelService $service): void
     {
         if (! $service->isEventEnabled('view_content')) {
             return;
@@ -298,12 +322,12 @@ class HookServiceProvider extends ServiceProvider
 
         $service->sendServerEvent('CompletePayment', [
             'contents' => $contents,
-            'value' => (float) $order->amount,
+            'value' => (float) $order->sub_total,
             'currency' => $currency,
         ], $userData, $eventId);
     }
 
-    protected function resolveProduct(int|string $productId): ?Product
+    protected function resolveProduct(int|string $productId): mixed
     {
         if (! class_exists(Product::class)) {
             return null;
@@ -326,7 +350,7 @@ class HookServiceProvider extends ServiceProvider
     {
         $data = [];
 
-        if (class_exists(Customer::class)) {
+        if ($this->isEcommerceActive() && class_exists(Customer::class)) {
             $customer = auth('customer')->user();
 
             if ($customer) {
