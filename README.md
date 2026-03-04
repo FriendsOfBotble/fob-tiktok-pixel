@@ -2,6 +2,8 @@
 
 TikTok Pixel integration with Server-Side Events API for Botble CMS e-commerce stores. Tracks conversions and optimizes ad campaigns with both client-side pixel and server-side event deduplication.
 
+![TikTok Pixel Settings](./art/2.png)
+
 ## Features
 
 - **TikTok Pixel JavaScript** - Async pixel injection via `<head>`, zero performance impact
@@ -33,13 +35,16 @@ TikTok Pixel integration with Server-Side Events API for Botble CMS e-commerce s
 
 ## Configuration
 
-1. Navigate to **Admin → Settings → Others → TikTok Pixel**
-2. Enable the plugin
-3. Enter your Pixel ID
-4. (Optional) Paste Access Token and enable Events API
-5. Configure which events to track
-6. Click Save
-7. Test connection (if Events API enabled)
+Navigate to **Admin → Settings → Others → TikTok Pixel**.
+
+![Settings Navigation](./art/1.png)
+
+1. Enable the plugin
+2. Enter your Pixel ID
+3. (Optional) Paste Access Token and enable Events API
+4. Configure which events to track
+5. Click Save
+6. Test connection (if Events API enabled)
 
 ## Events Tracked
 
